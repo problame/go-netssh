@@ -1,0 +1,10 @@
+ignored = ["github.com/spf13/cobra"]
+
+[[constraint]]
+  branch = "master"
+  name = "github.com/ftrvxmtrx/fd"
+
+[[constraint]]
+  branch = "master"
+  name = "github.com/problame/go-rwccmd"
+
