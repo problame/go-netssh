@@ -18,6 +18,7 @@ var connectArgs struct {
 	killSSHDuration time.Duration
 	waitBeforeRequestDuration time.Duration
 	responseTimeout time.Duration
+	dialTimeout time.Duration
 	endpoint netssh.Endpoint
 
 }
@@ -29,12 +30,19 @@ var connectCmd = &cobra.Command{
 
 		log := log.New(os.Stdout, "", log.Ltime|log.Lmicroseconds|log.Lshortfile)
 
+		log.Print("dialing %#v", connectArgs.endpoint)
+		log.Printf("timeout %s", connectArgs.dialTimeout)
 		ctx := netssh.ContextWithLog(context.TODO(), log)
 		ctx = rwccmd.ContextWithLog(ctx, log)
-		outstream, err := netssh.Dial(ctx, connectArgs.endpoint)
-		if err != nil {
+		dialCtx, dialCancel := context.WithTimeout(ctx, connectArgs.dialTimeout)
+		outstream, err := netssh.Dial(dialCtx, connectArgs.endpoint)
+		dialCancel()
+		if err == context.DeadlineExceeded {
+			log.Panic("dial timeout exceeded")
+		} else if err != nil {
 			log.Panic(err)
 		}
+
 		defer func() {
 			log.Printf("closing connection in defer")
 			err := outstream.Close()
@@ -86,6 +94,7 @@ func init() {
 	connectCmd.Flags().DurationVar(&connectArgs.killSSHDuration, "killSSH",0, "")
 	connectCmd.Flags().DurationVar(&connectArgs.waitBeforeRequestDuration, "wait",0, "")
 	connectCmd.Flags().DurationVar(&connectArgs.responseTimeout, "responseTimeout",math.MaxInt64, "")
+	connectCmd.Flags().DurationVar(&connectArgs.dialTimeout, "dialTimeout",math.MaxInt64, "")
 	connectCmd.Flags().StringVar(&connectArgs.endpoint.Host, "ssh.host", "", "")
 	connectCmd.Flags().StringVar(&connectArgs.endpoint.User, "ssh.user", "", "")
 	connectCmd.Flags().StringVar(&connectArgs.endpoint.IdentityFile, "ssh.identity", "", "")

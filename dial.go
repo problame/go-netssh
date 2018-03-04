@@ -110,10 +110,16 @@ var banner_msg = mustMessage("SSHCON_HELO")
 var proxy_error_msg = mustMessage("SSHCON_PROXY_ERROR")
 var begin_msg = mustMessage("SSHCON_BEGIN")
 
-func Dial(ctx context.Context, endpoint Endpoint) (*SSHConn , error) {
+// Dial connects to the remote endpoint where it expects a command executing Proxy().
+// Dial performs a handshake consisting of the exchange of banner messages before returning the connection.
+// If the handshake cannot be completed before dialCtx is Done(), the underlying ssh command is killed
+// and the dialCtx.Err() returned.
+// If the handshake completes, dialCtx's deadline does not affect the returned connection.
+func Dial(dialCtx context.Context, endpoint Endpoint) (*SSHConn , error) {
 
 	sshCmd, sshArgs, sshEnv := endpoint.CmdArgs()
-	cmd, err := rwccmd.CommandContext(ctx, sshCmd, sshArgs, sshEnv)
+	commandCtx, commandCancel := context.WithCancel(context.Background())
+	cmd, err := rwccmd.CommandContext(commandCtx, sshCmd, sshArgs, sshEnv)
 	if err != nil {
 		return nil, err
 	}
@@ -149,10 +155,12 @@ func Dial(ctx context.Context, endpoint Endpoint) (*SSHConn , error) {
 	}()
 
 	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	case <-dialCtx.Done():
+		commandCancel()
+		return nil, dialCtx.Err()
 	case err := <-confErrChan:
 		if err != nil {
+			commandCancel()
 			return nil, err
 		}
 	}
