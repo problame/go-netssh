@@ -11,7 +11,7 @@
   branch = "master"
   name = "github.com/problame/go-rwccmd"
   packages = ["."]
-  revision = "391d2c78c8404a9683d79f75dd24ab53040f89f7"
+  revision = "459ad908b400977c19ddce3c82f9d611709bff2e"
 
 [solve-meta]
   analyzer-name = "dep"
