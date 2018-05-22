@@ -186,6 +186,7 @@ func Dial(dialCtx context.Context, endpoint Endpoint) (*SSHConn , error) {
 
 	confErrChan := make(chan error)
 	go func() {
+		defer close(confErrChan)
 		var buf bytes.Buffer
 		if _, err := io.CopyN(&buf, cmd, int64(len(banner_msg))); err != nil {
 			confErrChan <- &SSHError{err, "read banner"}
@@ -208,13 +209,22 @@ func Dial(dialCtx context.Context, endpoint Endpoint) (*SSHConn , error) {
 			confErrChan <- &SSHError{err, "send begin message"}
 			return
 		}
-		close(confErrChan)
 	}()
 
 	select {
 	case <-dialCtx.Done():
+
 		commandCancel()
+		// cancelling will make one of the calls in above goroutine fail,
+		// and the goroutine will send the error to confErrChan
+		//
+		// ignore the error and return the cancellation cause
+
+		// draining always terminates because we know the channel is always closed
+		for _ = range confErrChan {}
+
 		return nil, dialCtx.Err()
+
 	case err := <-confErrChan:
 		if err != nil {
 			commandCancel()
