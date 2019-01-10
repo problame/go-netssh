@@ -2,20 +2,74 @@
 
 
 [[projects]]
-  branch = "master"
-  name = "github.com/ftrvxmtrx/fd"
-  packages = ["."]
-  revision = "c6d800382fff6dc1412f34269f71b7f83bd059ad"
+  digest = "1:0deddd908b6b4b768cfc272c16ee61e7088a60f7fe2f06c547bd3d8e1f8b8e77"
+  name = "github.com/davecgh/go-spew"
+  packages = ["spew"]
+  pruneopts = ""
+  revision = "8991bc29aa16c548c550c7ff78260e27b9ab7c73"
+  version = "v1.1.1"
 
 [[projects]]
   branch = "master"
+  digest = "1:5d0a2385edf4ba44f3b7b76bc0436ceb8f62bf55aa5d540a9eb9ec6c58d86809"
+  name = "github.com/ftrvxmtrx/fd"
+  packages = ["."]
+  pruneopts = ""
+  revision = "c6d800382fff6dc1412f34269f71b7f83bd059ad"
+
+[[projects]]
+  digest = "1:256484dbbcd271f9ecebc6795b2df8cad4c458dd0f5fd82a8c2fa0c29f233411"
+  name = "github.com/pmezard/go-difflib"
+  packages = ["difflib"]
+  pruneopts = ""
+  revision = "792786c7400a136282c1664665ae0a8db921c6c2"
+  version = "v1.0.0"
+
+[[projects]]
+  branch = "master"
+  digest = "1:b6cf42c1a43c7fe565554a908552c37f548a6983eff9cce0fc5ba477c76f70ca"
   name = "github.com/problame/go-rwccmd"
   packages = ["."]
+  pruneopts = ""
   revision = "459ad908b400977c19ddce3c82f9d611709bff2e"
+
+[[projects]]
+  digest = "1:381bcbeb112a51493d9d998bbba207a529c73dbb49b3fd789e48c63fac1f192c"
+  name = "github.com/stretchr/testify"
+  packages = [
+    "assert",
+    "require",
+  ]
+  pruneopts = ""
+  revision = "ffdc059bfe9ce6a4e144ba849dbedead332c6053"
+  version = "v1.3.0"
+
+[[projects]]
+  digest = "1:f80053a92d9ac874ad97d665d3005c1118ed66e9e88401361dc32defe6bef21c"
+  name = "github.com/theckman/goconstraint"
+  packages = ["go1.11/gte"]
+  pruneopts = ""
+  revision = "93babf24513d0e8277635da8169fcc5a46ae3f6a"
+  version = "v1.11.0"
+
+[[projects]]
+  branch = "master"
+  digest = "1:682e21255aca5ab896dd001984417c1a13cea5fc7821c79455d9f9d34e35c6d1"
+  name = "golang.org/x/sys"
+  packages = ["unix"]
+  pruneopts = ""
+  revision = "48ac38b7c8cbedd50b1613c0fccacfc7d88dfcdf"
 
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "6d17a42f91382af72cfb4bd411be2c6d65631890a152ad97b3f0bfab45ef8f1b"
+  input-imports = [
+    "github.com/ftrvxmtrx/fd",
+    "github.com/problame/go-rwccmd",
+    "github.com/stretchr/testify/assert",
+    "github.com/stretchr/testify/require",
+    "github.com/theckman/goconstraint/go1.11/gte",
+    "golang.org/x/sys/unix",
+  ]
   solver-name = "gps-cdcl"
   solver-version = 1

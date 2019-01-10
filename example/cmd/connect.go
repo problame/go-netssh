@@ -1,26 +1,25 @@
 package cmd
 
 import (
-
-	"github.com/spf13/cobra"
-	"log"
+	"bytes"
+	"context"
 	"io"
 	"io/ioutil"
-	"time"
-	"context"
-	"os"
-	"github.com/problame/go-netssh"
+	"log"
 	"math"
-	"github.com/problame/go-rwccmd"
+	"os"
+	"time"
+
+	"github.com/problame/go-netssh"
+	"github.com/spf13/cobra"
 )
 
 var connectArgs struct {
-	killSSHDuration time.Duration
+	killSSHDuration           time.Duration
 	waitBeforeRequestDuration time.Duration
-	responseTimeout time.Duration
-	dialTimeout time.Duration
-	endpoint netssh.Endpoint
-
+	responseTimeout           time.Duration
+	dialTimeout               time.Duration
+	endpoint                  netssh.Endpoint
 }
 
 var connectCmd = &cobra.Command{
@@ -30,10 +29,9 @@ var connectCmd = &cobra.Command{
 
 		log := log.New(os.Stdout, "", log.Ltime|log.Lmicroseconds|log.Lshortfile)
 
-		log.Print("dialing %#v", connectArgs.endpoint)
+		log.Printf("dialing %#v", connectArgs.endpoint)
 		log.Printf("timeout %s", connectArgs.dialTimeout)
 		ctx := netssh.ContextWithLog(context.TODO(), log)
-		ctx = rwccmd.ContextWithLog(ctx, log)
 		dialCtx, dialCancel := context.WithTimeout(ctx, connectArgs.dialTimeout)
 		outstream, err := netssh.Dial(dialCtx, connectArgs.endpoint)
 		dialCancel()
@@ -52,24 +50,14 @@ var connectCmd = &cobra.Command{
 		}()
 
 		if connectArgs.killSSHDuration != 0 {
-			go func(){
+			go func() {
 				time.Sleep(connectArgs.killSSHDuration)
 				log.Printf("killing ssh process")
-				if err := outstream.Cmd().Kill(); err != nil {
-					log.Printf("error killing ssh process: %s", err)
-				}
+				outstream.CmdCancel()
 			}()
 		}
 
 		time.Sleep(connectArgs.waitBeforeRequestDuration)
-
-		var dl time.Time
-		if connectArgs.responseTimeout > 0 {
-			dl = time.Now().Add(connectArgs.responseTimeout)
-		} else {
-			dl = time.Time{}
-		}
-		outstream.Cmd().CloseAtDeadline(dl)
 
 		log.Print("writing request")
 		n, err := outstream.Write([]byte("b\n"))
@@ -81,20 +69,32 @@ var connectCmd = &cobra.Command{
 		if err != nil {
 			log.Panic(err)
 		}
-		log.Print("writing close request")
+
+		log.Print("request for close")
 		n, err = outstream.Write([]byte("a\n"))
 		if n != 2 || err != nil {
 			log.Panic(err)
 		}
+		log.Printf("wait for close message")
+		var resp [2]byte
+		n, err = outstream.Read(resp[:])
+		if n != 2 || err != nil {
+			log.Panic(err)
+		}
+		if bytes.Compare(resp[:], []byte("A\n")) != 0 {
+			log.Panicf("unexpected close message: %v", resp)
+		}
+		log.Printf("received close message")
+
 	},
 }
 
 func init() {
 	RootCmd.AddCommand(connectCmd)
-	connectCmd.Flags().DurationVar(&connectArgs.killSSHDuration, "killSSH",0, "")
-	connectCmd.Flags().DurationVar(&connectArgs.waitBeforeRequestDuration, "wait",0, "")
-	connectCmd.Flags().DurationVar(&connectArgs.responseTimeout, "responseTimeout",math.MaxInt64, "")
-	connectCmd.Flags().DurationVar(&connectArgs.dialTimeout, "dialTimeout",math.MaxInt64, "")
+	connectCmd.Flags().DurationVar(&connectArgs.killSSHDuration, "killSSH", 0, "")
+	connectCmd.Flags().DurationVar(&connectArgs.waitBeforeRequestDuration, "wait", 0, "")
+	connectCmd.Flags().DurationVar(&connectArgs.responseTimeout, "responseTimeout", math.MaxInt64, "")
+	connectCmd.Flags().DurationVar(&connectArgs.dialTimeout, "dialTimeout", math.MaxInt64, "")
 	connectCmd.Flags().StringVar(&connectArgs.endpoint.Host, "ssh.host", "", "")
 	connectCmd.Flags().StringVar(&connectArgs.endpoint.User, "ssh.user", "", "")
 	connectCmd.Flags().StringVar(&connectArgs.endpoint.IdentityFile, "ssh.identity", "", "")

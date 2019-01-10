@@ -1,14 +1,15 @@
 package netssh
 
 import (
-	"net"
-	"fmt"
-	"context"
-	"io"
 	"bytes"
-	"github.com/problame/go-rwccmd"
+	"context"
+	"fmt"
+	"io"
+	"net"
 	"os/exec"
+	"sync"
 	"syscall"
+	"time"
 )
 
 type Endpoint struct {
@@ -45,54 +46,152 @@ func (e Endpoint) CmdArgs() (cmd string, args []string, env []string) {
 	return
 }
 
-// FIXME: should conform to net.Conn one day, but deadlines as required by net.Conn are complicated:
-// it requires to keep the connection open when the deadline is exceeded, but rwcconn.Cmd does not provide Deadlines
-// for good reason, see their docs for details.
 type SSHConn struct {
-	c *rwccmd.Cmd
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	stdout io.ReadCloser
+
+	shutdownMtx    sync.Mutex
+	shutdownResult *shutdownResult
+	cmdCancel      context.CancelFunc
 }
 
-const go_network string = "SSH"
+const go_network string = "netssh"
 
-type addr struct {
+type clientAddr struct {
 	pid int
 }
 
-func (a addr) Network() string {
+func (a clientAddr) Network() string {
 	return go_network
 }
 
-func (a addr) String() string {
+func (a clientAddr) String() string {
 	return fmt.Sprintf("pid=%d", a.pid)
 }
 
 func (conn *SSHConn) LocalAddr() net.Addr {
-	return addr{conn.c.Pid()}
+	proc := conn.cmd.Process
+	if proc == nil {
+		return clientAddr{-1}
+	}
+	return clientAddr{proc.Pid}
 }
 
 func (conn *SSHConn) RemoteAddr() net.Addr {
-	return addr{conn.c.Pid()}
+	return conn.LocalAddr()
 }
 
+// Read implements io.Reader.
+// It returns *IOError for any non-nil error that is != io.EOF.
 func (conn *SSHConn) Read(p []byte) (int, error) {
-	return conn.c.Read(p)
+	n, err := conn.stdout.Read(p)
+	if err != nil && err != io.EOF {
+		return n, &IOError{err}
+	}
+	return n, nil
 }
 
+// Write implements io.Writer.
+// It returns *IOError for any error != nil.
 func (conn *SSHConn) Write(p []byte) (int, error) {
-	return conn.c.Write(p)
+	n, err := conn.stdin.Write(p)
+	if err != nil {
+		return n, &IOError{err}
+	}
+	return n, nil
 }
 
-func (conn *SSHConn) Close() (error) {
-	return conn.c.Close()
+func (conn *SSHConn) CloseWrite() error {
+	return conn.stdin.Close()
 }
 
-// Use at your own risk...
-func (conn *SSHConn) Cmd() *rwccmd.Cmd {
-	return conn.c
+type deadliner interface {
+	SetReadDeadline(time.Time) error
+	SetWriteDeadline(time.Time) error
+}
+
+func (conn *SSHConn) SetReadDeadline(t time.Time) error {
+	// type assertion is covered by test TestExecCmdPipesDeadlineBehavior
+	return conn.stdout.(deadliner).SetReadDeadline(t)
+}
+
+func (conn *SSHConn) SetWriteDeadline(t time.Time) error {
+	// type assertion is covered by test TestExecCmdPipesDeadlineBehavior
+	return conn.stdin.(deadliner).SetWriteDeadline(t)
+}
+
+func (conn *SSHConn) SetDeadline(t time.Time) error {
+	// try both
+	rerr := conn.SetReadDeadline(t)
+	werr := conn.SetWriteDeadline(t)
+	if rerr != nil {
+		return rerr
+	}
+	if werr != nil {
+		return werr
+	}
+	return nil
+}
+
+func (conn *SSHConn) Close() error {
+	conn.shutdownProcess()
+	return nil // FIXME: waitError will be non-zero because we signaled it, shutdownProcess needs to distinguish that
+}
+
+type shutdownResult struct {
+	waitErr error
+}
+
+func (conn *SSHConn) shutdownProcess() *shutdownResult {
+	conn.shutdownMtx.Lock()
+	defer conn.shutdownMtx.Unlock()
+
+	if conn.shutdownResult != nil {
+		return conn.shutdownResult
+	}
+
+	termSuccessful := make(chan error, 1)
+	go func() {
+		if err := conn.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+			// TODO log error
+			return
+		}
+		termSuccessful <- conn.cmd.Wait()
+	}()
+
+	timeout := time.NewTimer(1 * time.Second) // FIXME const
+	defer timeout.Stop()
+
+	select {
+	case waitErr := <-termSuccessful:
+		conn.shutdownResult = &shutdownResult{waitErr}
+	case <-timeout.C:
+		conn.cmdCancel()
+		waitErr := conn.cmd.Wait()
+		conn.shutdownResult = &shutdownResult{waitErr}
+	}
+	return conn.shutdownResult
+}
+
+// Cmd returns the underlying *exec.Cmd (the ssh client process)
+// Use read-only, should not be necessary for regular users.
+func (conn *SSHConn) Cmd() *exec.Cmd {
+	return conn.cmd
+}
+
+// CmdCancel bypasses the normal shutdown mechanism of SSHConn
+// (that is, calling Close) and cancels the process's context,
+// which usually results in SIGKILL being sent to the process.
+// Intended for integration tests, regular users shouldn't use it.
+func (conn *SSHConn) CmdCancel() {
+	conn.cmdCancel()	
 }
 
 const bannerMessageLen = 31
+
 var messages = make(map[string][]byte)
+
 func mustMessage(str string) []byte {
 	if len(str) > bannerMessageLen {
 		panic("message length must be smaller than bannerMessageLen")
@@ -108,12 +207,13 @@ func mustMessage(str string) []byte {
 	buf.Write(bytes.Repeat([]byte{0}, bannerMessageLen-n))
 	return buf.Bytes()
 }
+
 var banner_msg = mustMessage("SSHCON_HELO")
 var proxy_error_msg = mustMessage("SSHCON_PROXY_ERROR")
 var begin_msg = mustMessage("SSHCON_BEGIN")
 
 type SSHError struct {
-	RWCError error
+	RWCError      error
 	WhileActivity string
 }
 
@@ -172,23 +272,31 @@ func (e ProtocolError) Error() string {
 // If the handshake completes, dialCtx's deadline does not affect the returned connection.
 //
 // Errors returned are either dialCtx.Err(), or intances of ProtocolError or *SSHError
-func Dial(dialCtx context.Context, endpoint Endpoint) (*SSHConn , error) {
+func Dial(dialCtx context.Context, endpoint Endpoint) (*SSHConn, error) {
 
 	sshCmd, sshArgs, sshEnv := endpoint.CmdArgs()
 	commandCtx, commandCancel := context.WithCancel(context.Background())
-	cmd, err := rwccmd.CommandContext(commandCtx, sshCmd, sshArgs, sshEnv)
+	cmd := exec.CommandContext(commandCtx, sshCmd, sshArgs...)
+	cmd.Env = sshEnv
+	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
 	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	// stderr is required for *exec.ExitErr
+
 	if err = cmd.Start(); err != nil {
 		return nil, err
 	}
 
-	confErrChan := make(chan error)
+	confErrChan := make(chan error, 1)
 	go func() {
 		defer close(confErrChan)
 		var buf bytes.Buffer
-		if _, err := io.CopyN(&buf, cmd, int64(len(banner_msg))); err != nil {
+		if _, err := io.CopyN(&buf, stdout, int64(len(banner_msg))); err != nil {
 			confErrChan <- &SSHError{err, "read banner"}
 			return
 		}
@@ -205,7 +313,7 @@ func Dial(dialCtx context.Context, endpoint Endpoint) (*SSHConn , error) {
 		}
 		buf.Reset()
 		buf.Write(begin_msg)
-		if _, err := io.Copy(cmd, &buf); err != nil {
+		if _, err := io.Copy(stdin, &buf); err != nil {
 			confErrChan <- &SSHError{err, "send begin message"}
 			return
 		}
@@ -221,7 +329,8 @@ func Dial(dialCtx context.Context, endpoint Endpoint) (*SSHConn , error) {
 		// ignore the error and return the cancellation cause
 
 		// draining always terminates because we know the channel is always closed
-		for _ = range confErrChan {}
+		for _ = range confErrChan {
+		}
 
 		return nil, dialCtx.Err()
 
@@ -232,5 +341,10 @@ func Dial(dialCtx context.Context, endpoint Endpoint) (*SSHConn , error) {
 		}
 	}
 
-	return &SSHConn{cmd}, nil
+	return &SSHConn{
+		cmd:       cmd,
+		stdin:     stdin,
+		stdout:    stdout,
+		cmdCancel: commandCancel,
+	}, nil
 }

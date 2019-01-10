@@ -57,15 +57,15 @@ var serveCmd = &cobra.Command{
 				switch msg[0] {
 				case byte('a'):
 					log.Print("closing conn after quit")
-					_, err := io.WriteString(rwc, "we quit now")
-					if err != nil {
-						log.Print("error writing " + err.Error())
+					n, err := rwc.Write([]byte("A\n"))
+					if n != 2 || err != nil {
+						log.Print("error writing: " + err.Error())
 					}
 					break out
 				default:
 					log.Printf("msg: %s", string(msg[:]))
 					for i := 0; i < Bytecount; {
-						n, err := io.CopyN(rwc, rand, int64(1024))
+						n, err := io.CopyN(rwc, rand, int64(Bytecount))
 						if err != nil {
 							log.Print("error writing: " + err.Error())
 							break out

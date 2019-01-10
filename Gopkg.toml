@@ -8,3 +8,6 @@ ignored = ["github.com/spf13/cobra"]
   branch = "master"
   name = "github.com/problame/go-rwccmd"
 
+[[constraint]]
+  name = "github.com/theckman/goconstraint"
+  version = "1.11.0"
