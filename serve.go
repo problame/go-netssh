@@ -118,7 +118,7 @@ func (f *ServeConn) Read(p []byte) (n int, err error) {
 	if err != nil && err != io.EOF {
 		err = &IOError{err}
 	}
-	return
+	return n, err
 }
 
 // Write implements io.Writer.
@@ -128,7 +128,7 @@ func (f *ServeConn) Write(p []byte) (n int, err error) {
 	if err != nil {
 		err = &IOError{err}
 	}
-	return
+	return n, err
 }
 
 func (f *ServeConn) Close() (err error) {

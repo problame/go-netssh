@@ -89,7 +89,7 @@ func (conn *SSHConn) Read(p []byte) (int, error) {
 	if err != nil && err != io.EOF {
 		return n, &IOError{err}
 	}
-	return n, nil
+	return n, err
 }
 
 // Write implements io.Writer.
@@ -99,7 +99,7 @@ func (conn *SSHConn) Write(p []byte) (int, error) {
 	if err != nil {
 		return n, &IOError{err}
 	}
-	return n, nil
+	return n, err
 }
 
 func (conn *SSHConn) CloseWrite() error {
