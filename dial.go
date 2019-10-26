@@ -52,7 +52,7 @@ type SSHConn struct {
 	stdout io.ReadCloser
 
 	shutdownMtx    sync.Mutex
-	shutdownResult *shutdownResult
+	shutdownResult *shutdownResult // TODO not used anywhere
 	cmdCancel      context.CancelFunc
 }
 
@@ -151,24 +151,24 @@ func (conn *SSHConn) shutdownProcess() *shutdownResult {
 		return conn.shutdownResult
 	}
 
-	termSuccessful := make(chan error, 1)
+	wait := make(chan error, 1)
 	go func() {
 		if err := conn.cmd.Process.Signal(syscall.SIGTERM); err != nil {
 			// TODO log error
 			return
 		}
-		termSuccessful <- conn.cmd.Wait()
+		wait <- conn.cmd.Wait()
 	}()
 
 	timeout := time.NewTimer(1 * time.Second) // FIXME const
 	defer timeout.Stop()
 
 	select {
-	case waitErr := <-termSuccessful:
+	case waitErr := <-wait:
 		conn.shutdownResult = &shutdownResult{waitErr}
 	case <-timeout.C:
 		conn.cmdCancel()
-		waitErr := conn.cmd.Wait()
+		waitErr := <- wait // reuse existing Wait invocation, must not call twice
 		conn.shutdownResult = &shutdownResult{waitErr}
 	}
 	return conn.shutdownResult
@@ -185,7 +185,7 @@ func (conn *SSHConn) Cmd() *exec.Cmd {
 // which usually results in SIGKILL being sent to the process.
 // Intended for integration tests, regular users shouldn't use it.
 func (conn *SSHConn) CmdCancel() {
-	conn.cmdCancel()	
+	conn.cmdCancel()
 }
 
 const bannerMessageLen = 31
