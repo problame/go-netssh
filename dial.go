@@ -10,6 +10,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/zrepl/zrepl/util/circlog"
 )
 
 type Endpoint struct {
@@ -168,7 +170,7 @@ func (conn *SSHConn) shutdownProcess() *shutdownResult {
 		conn.shutdownResult = &shutdownResult{waitErr}
 	case <-timeout.C:
 		conn.cmdCancel()
-		waitErr := <- wait // reuse existing Wait invocation, must not call twice
+		waitErr := <-wait // reuse existing Wait invocation, must not call twice
 		conn.shutdownResult = &shutdownResult{waitErr}
 	}
 	return conn.shutdownResult
@@ -219,11 +221,6 @@ type SSHError struct {
 
 // Error() will try to present a one-line error message unless ssh stderr output is longer than one line
 func (e *SSHError) Error() string {
-
-	if e.RWCError == io.EOF {
-		// rwccmd returns io.EOF on exit status 0, but we do not expect ssh to do that
-		return fmt.Sprintf("ssh exited unexpectedly with exit status 0")
-	}
 
 	exitErr, ok := e.RWCError.(*exec.ExitError)
 	if !ok {
@@ -286,10 +283,23 @@ func Dial(dialCtx context.Context, endpoint Endpoint) (*SSHConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	// stderr is required for *exec.ExitErr
+
+	stderrBuf, err := circlog.NewCircularLog(1 << 15)
+	if err != nil {
+		panic(err) // wrong API usage
+	}
+	cmd.Stderr = stderrBuf
 
 	if err = cmd.Start(); err != nil {
 		return nil, err
+	}
+	cmdWaitErrOrIOErr := func(ioErr error, what string) *SSHError {
+		werr := cmd.Wait()
+		if werr, ok := werr.(*exec.ExitError); ok {
+			werr.Stderr = []byte(stderrBuf.String())
+			return &SSHError{werr, what}
+		}
+		return &SSHError{ioErr, what}
 	}
 
 	confErrChan := make(chan error, 1)
@@ -297,7 +307,7 @@ func Dial(dialCtx context.Context, endpoint Endpoint) (*SSHConn, error) {
 		defer close(confErrChan)
 		var buf bytes.Buffer
 		if _, err := io.CopyN(&buf, stdout, int64(len(banner_msg))); err != nil {
-			confErrChan <- &SSHError{err, "read banner"}
+			confErrChan <- cmdWaitErrOrIOErr(err, "read banner")
 			return
 		}
 		resp := buf.Bytes()
@@ -314,7 +324,7 @@ func Dial(dialCtx context.Context, endpoint Endpoint) (*SSHConn, error) {
 		buf.Reset()
 		buf.Write(begin_msg)
 		if _, err := io.Copy(stdin, &buf); err != nil {
-			confErrChan <- &SSHError{err, "send begin message"}
+			confErrChan <- cmdWaitErrOrIOErr(err, "send begin message")
 			return
 		}
 	}()
@@ -331,6 +341,9 @@ func Dial(dialCtx context.Context, endpoint Endpoint) (*SSHConn, error) {
 		// draining always terminates because we know the channel is always closed
 		for _ = range confErrChan {
 		}
+
+		// TODO collect stderr in this case
+		// can probably extend *SSHError for this but need to implement net.Error
 
 		return nil, dialCtx.Err()
 
