@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/zrepl/zrepl/util/circlog"
+	"github.com/problame/go-netssh/internal/circlog"
 )
 
 type Endpoint struct {
