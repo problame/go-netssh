@@ -315,9 +315,11 @@ func Dial(dialCtx context.Context, endpoint Endpoint) (*SSHConn, error) {
 		case bytes.Equal(resp, banner_msg):
 			break
 		case bytes.Equal(resp, proxy_error_msg):
+			_ = cmdWaitErrOrIOErr(nil, "")
 			confErrChan <- ProtocolError{"proxy error, check remote configuration"}
 			return
 		default:
+			_ = cmdWaitErrOrIOErr(nil, "")
 			confErrChan <- ProtocolError{fmt.Sprintf("unknown banner message: %v", resp)}
 			return
 		}
