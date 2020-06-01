@@ -33,7 +33,6 @@ var serveCmd = &cobra.Command{
 			rwc, err := listener.Accept()
 			defer rwc.Close()
 
-
 			log.Print("urandom")
 			rand, err := os.Open("/dev/urandom")
 			if err != nil {

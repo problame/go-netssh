@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
@@ -20,73 +21,8 @@ var connectArgs struct {
 	responseTimeout           time.Duration
 	dialTimeout               time.Duration
 	endpoint                  netssh.Endpoint
-}
-
-var connectCmd = &cobra.Command{
-	Use:   "connect",
-	Short: "connect to server over SSH using proxy",
-	Run: func(cmd *cobra.Command, args []string) {
-
-		log := log.New(os.Stdout, "", log.Ltime|log.Lmicroseconds|log.Lshortfile)
-
-		log.Printf("dialing %#v", connectArgs.endpoint)
-		log.Printf("timeout %s", connectArgs.dialTimeout)
-		ctx := netssh.ContextWithLog(context.TODO(), log)
-		dialCtx, dialCancel := context.WithTimeout(ctx, connectArgs.dialTimeout)
-		outstream, err := netssh.Dial(dialCtx, connectArgs.endpoint)
-		dialCancel()
-		if err == context.DeadlineExceeded {
-			log.Panic("dial timeout exceeded")
-		} else if err != nil {
-			log.Panic(err)
-		}
-
-		defer func() {
-			log.Printf("closing connection in defer")
-			err := outstream.Close()
-			if err != nil {
-				log.Printf("error closing connection in defer: %s", err)
-			}
-		}()
-
-		if connectArgs.killSSHDuration != 0 {
-			go func() {
-				time.Sleep(connectArgs.killSSHDuration)
-				log.Printf("killing ssh process")
-				outstream.CmdCancel()
-			}()
-		}
-
-		time.Sleep(connectArgs.waitBeforeRequestDuration)
-
-		log.Print("writing request")
-		n, err := outstream.Write([]byte("b\n"))
-		if n != 2 || err != nil {
-			log.Panic(err)
-		}
-		log.Print("read response")
-		_, err = io.CopyN(ioutil.Discard, outstream, int64(Bytecount))
-		if err != nil {
-			log.Panic(err)
-		}
-
-		log.Print("request for close")
-		n, err = outstream.Write([]byte("a\n"))
-		if n != 2 || err != nil {
-			log.Panic(err)
-		}
-		log.Printf("wait for close message")
-		var resp [2]byte
-		n, err = outstream.Read(resp[:])
-		if n != 2 || err != nil {
-			log.Panic(err)
-		}
-		if bytes.Compare(resp[:], []byte("A\n")) != 0 {
-			log.Panicf("unexpected close message: %v", resp)
-		}
-		log.Printf("received close message")
-
-	},
+	numAttempts               int
+	attemptInterval           time.Duration
 }
 
 func init() {
@@ -99,4 +35,89 @@ func init() {
 	connectCmd.Flags().StringVar(&connectArgs.endpoint.User, "ssh.user", "", "")
 	connectCmd.Flags().StringVar(&connectArgs.endpoint.IdentityFile, "ssh.identity", "", "")
 	connectCmd.Flags().Uint16Var(&connectArgs.endpoint.Port, "ssh.port", 22, "")
+	connectCmd.Flags().IntVar(&connectArgs.numAttempts, "attempts.count", 1, "number of connection attempts, 0 for infinite")
+	connectCmd.Flags().DurationVar(&connectArgs.attemptInterval, "attempts.interval", 1*time.Second, "sleep between connection attempts")
+}
+
+var connectCmd = &cobra.Command{
+	Use:   "connect",
+	Short: "connect to server over SSH using proxy",
+	Run: func(cmd *cobra.Command, args []string) {
+		log := log.New(os.Stdout, "", log.Ltime|log.Lmicroseconds|log.Lshortfile)
+
+		lastPanicked := false
+		for a := 0; connectArgs.numAttempts == 0 || a < connectArgs.numAttempts; a++ {
+			log.SetPrefix(fmt.Sprintf("attempt %03d: ", a))
+			func() {
+				defer func() {
+					e := recover()
+					lastPanicked = e != nil
+					log.Printf("panicked=%v %s", lastPanicked, e)
+				}()
+				connectAttempt(log)
+			}()
+			time.Sleep(connectArgs.attemptInterval)
+		}
+
+	},
+}
+
+func connectAttempt(log *log.Logger) {
+
+	log.Printf("dialing %#v", connectArgs.endpoint)
+	log.Printf("timeout %s", connectArgs.dialTimeout)
+	ctx := netssh.ContextWithLog(context.TODO(), log)
+	dialCtx, dialCancel := context.WithTimeout(ctx, connectArgs.dialTimeout)
+	outstream, err := netssh.Dial(dialCtx, connectArgs.endpoint)
+	dialCancel()
+	if err == context.DeadlineExceeded {
+		log.Panic("dial timeout exceeded")
+	} else if err != nil {
+		log.Panic(err)
+	}
+
+	defer func() {
+		log.Printf("closing connection in defer")
+		err := outstream.Close()
+		if err != nil {
+			log.Printf("error closing connection in defer: %s", err)
+		}
+	}()
+
+	if connectArgs.killSSHDuration != 0 {
+		go func() {
+			time.Sleep(connectArgs.killSSHDuration)
+			log.Printf("killing ssh process")
+			outstream.CmdCancel()
+		}()
+	}
+
+	time.Sleep(connectArgs.waitBeforeRequestDuration)
+
+	log.Print("writing request")
+	n, err := outstream.Write([]byte("b\n"))
+	if n != 2 || err != nil {
+		log.Panic(err)
+	}
+	log.Print("read response")
+	_, err = io.CopyN(ioutil.Discard, outstream, int64(Bytecount))
+	if err != nil {
+		log.Panic(err)
+	}
+
+	log.Print("request for close")
+	n, err = outstream.Write([]byte("a\n"))
+	if n != 2 || err != nil {
+		log.Panic(err)
+	}
+	log.Printf("wait for close message")
+	var resp [2]byte
+	n, err = outstream.Read(resp[:])
+	if n != 2 || err != nil {
+		log.Panic(err)
+	}
+	if bytes.Compare(resp[:], []byte("A\n")) != 0 {
+		log.Panicf("unexpected close message: %v", resp)
+	}
+	log.Printf("received close message")
 }
