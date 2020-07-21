@@ -1,0 +1,23 @@
+name: CI
+on:
+  push:
+    branches:
+    - "*"
+  schedule:
+    - cron: "23 10 * * *"
+jobs:
+  build_and_test:
+    runs-on: ubuntu-18.04
+    strategy:
+      matrix:
+        go: [ "1.14", "1.13", "1.12", "1.11" ]
+    name: CI on go ${{ matrix.go }}
+    env:
+      GO111MODULE: on
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-go@v2
+        with:
+          go-version: ${{matrix.go}}
+      - run: go version
+      - run: go test -v
